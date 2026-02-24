@@ -1,0 +1,21 @@
+# Base experiment config (minimal)
+dataset: fb15k-237
+task: node_classification
+labels:
+  type: frequency_bins
+  bins: 3
+model_defaults:
+  emb_dim: 64
+  hidden_dim: 64
+  num_layers: 2
+train:
+  lr: 0.01
+  weight_decay: 0.0005
+  epochs_cpu: 15
+  epochs_gpu: 30
+splits:
+  seed: 0
+  train_frac: 0.70
+  val_frac: 0.10
+scaling:
+  fracs: [0.25, 0.50, 0.75, 1.00]
