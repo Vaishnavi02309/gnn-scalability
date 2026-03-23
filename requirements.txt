@@ -4,3 +4,4 @@ numpy
 pandas
 pyyaml
 tqdm
+scikit-learn

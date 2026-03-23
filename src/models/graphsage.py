@@ -1,11 +1,10 @@
-"""Purpose: the model architecture.
+"""Purpose: GraphSAGE model for node classification.
 
 GraphSAGE uses message passing:
-takes node features x
-
-aggregates neighbor info using edge_index
-
-outputs logits (3 classes) """
+- Takes node features x
+- Aggregates neighbor info using edge_index
+- Outputs logits for node classification
+"""
 
 import torch
 from torch import nn
