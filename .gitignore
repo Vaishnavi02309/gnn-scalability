@@ -1,5 +1,6 @@
 # Environment
 .venv/
+.venv_pyg/
 venv/
 env/
 ENV/
