@@ -7,7 +7,7 @@ from src.utils.seed import set_seed
 from src.data.fb15k237 import load_fb15k237_homogeneous, sample_induced_subgraph
 from src.data.labeling import extract_domains_from_train, make_node_splits
 from src.models import build_model
-from src.train.trainer import run_training_dispatch, eval_model, measure_inference_time
+from src.train.trainer import run_training_dispatch, eval_model, measure_inference_time, measure_inference_time_rgcn, eval_model_rgcn
 from src.utils.io import append_result_row, write_history_csv
 from src.utils.memory import get_ram_usage_mb, reset_peak_gpu_memory, get_peak_gpu_memory_mb
 
@@ -48,12 +48,13 @@ def run_node_exp(
     # 1. Load graph
     # ------------------------------------------------------------------
     print("Loading graph from train.txt...")
-    data, node_id_map = load_fb15k237_homogeneous(
+    data, node_id_map, rel_id_map = load_fb15k237_homogeneous(
         train_txt_path=train_txt_path,
         feat_dim=feat_dim
     )
     data = data.to(device)
-
+    num_relations = len(rel_id_map)
+    print(f"  num_relations: {num_relations}")
     print(f"  num_nodes: {data.num_nodes}")
     print(f"  num_edges: {data.edge_index.shape[1]}")
 
@@ -187,6 +188,7 @@ def run_node_exp(
         out_dim=num_classes,
         num_layers=num_layers,
         dropout=dropout,
+        num_relations=num_relations,
     )
 
     model = model.to(device)
@@ -223,20 +225,39 @@ def run_node_exp(
     # 8. Inference / test
     # ------------------------------------------------------------------
     print("\nTesting...")
-    inference_time = measure_inference_time(
-        model=model,
-        x=data.x,
-        edge_index=data.edge_index,
-        repeats=1,
-    )
 
-    test_acc, test_f1_macro, test_f1_per_class = eval_model(
-        model=model,
-        x=data.x,
-        edge_index=data.edge_index,
-        y=data.y,
-        mask=data.test_mask,
-    )
+    if model_name.lower() == "rgcn":
+        inference_time = measure_inference_time_rgcn(
+            model=model,
+            x=data.x,
+            edge_index=data.edge_index,
+            edge_type=data.edge_type,
+            repeats=1,
+        )
+
+        test_acc, test_f1_macro, test_f1_per_class = eval_model_rgcn(
+            model=model,
+            x=data.x,
+            edge_index=data.edge_index,
+            edge_type=data.edge_type,
+            y=data.y,
+            mask=data.test_mask,
+        )
+    else:
+        inference_time = measure_inference_time(
+            model=model,
+            x=data.x,
+            edge_index=data.edge_index,
+            repeats=1,
+        )
+
+        test_acc, test_f1_macro, test_f1_per_class = eval_model(
+            model=model,
+            x=data.x,
+            edge_index=data.edge_index,
+            y=data.y,
+            mask=data.test_mask,
+        )
 
     print(f"\n{'=' * 60}")
     print("FINAL RESULTS:")
@@ -283,6 +304,7 @@ def run_node_exp(
         "test_accuracy": float(test_acc),
         "test_macro_f1": float(test_f1_macro),
         "num_parameters": int(num_params),
+        "num_relations": int(num_relations),
     }
 
     result_csv = Path(save_dir) / f"{model_name.lower()}_scalability.csv"

@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from sklearn.metrics import classification_report, f1_score
 from torch_geometric.loader import GraphSAINTRandomWalkSampler
+from torch_geometric.loader import ClusterData, ClusterLoader
 
 
 def accuracy(logits: torch.Tensor, y: torch.Tensor) -> float:
@@ -194,14 +195,11 @@ def train_graphsaint(
 ):
     """
     Train with PyG GraphSAINT random-walk sampler.
-
-    data must contain:
-        x, edge_index, y, train_mask, val_mask
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     loader = GraphSAINTRandomWalkSampler(
-        data=data.cpu(),              # sampler works easiest from CPU data
+        data=data.cpu(),
         batch_size=batch_size,
         walk_length=walk_length,
         num_steps=num_steps,
@@ -297,6 +295,249 @@ def train_graphsaint(
     return history
 
 
+def train_clustergcn(
+    model,
+    data,
+    epochs,
+    lr=0.01,
+    weight_decay=5e-4,
+    num_parts=50,
+    batch_size=5,
+    device="cpu",
+):
+    """
+    Cluster-GCN training using graph partitioning.
+    On Windows, PyG METIS partitioning is not supported.
+    """
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    try:
+        cluster_data = ClusterData(data.cpu(), num_parts=num_parts, recursive=False)
+        loader = ClusterLoader(cluster_data, batch_size=batch_size, shuffle=True)
+    except Exception as e:
+        raise RuntimeError(
+            "Cluster-GCN partitioning failed. On Windows, PyG METIS partitioning is not supported. "
+            "Use Linux/WSL for Cluster-GCN experiments."
+        ) from e
+
+    history = {
+        "epoch": [],
+        "train_loss": [],
+        "train_acc": [],
+        "val_acc": [],
+        "val_f1_macro": [],
+        "epoch_time_s": [],
+    }
+
+    best_val_acc = 0.0
+    best_state = None
+
+    device = torch.device(device)
+    model = model.to(device)
+
+    full_x = data.x.to(device)
+    full_edge_index = data.edge_index.to(device)
+    full_y = data.y.to(device)
+    full_val_mask = data.val_mask.to(device)
+
+    for epoch in range(1, epochs + 1):
+        t0 = time.time()
+        model.train()
+
+        total_loss = 0.0
+        total_correct = 0
+        total_count = 0
+
+        for batch in loader:
+            batch = batch.to(device)
+
+            optimizer.zero_grad()
+            out = model(batch.x, batch.edge_index)
+
+            train_mask = batch.train_mask
+            if train_mask.sum() == 0:
+                continue
+
+            loss = F.cross_entropy(out[train_mask], batch.y[train_mask])
+            loss.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                pred = out.argmax(dim=-1)
+                total_correct += int((pred[train_mask] == batch.y[train_mask]).sum().item())
+                total_count += int(train_mask.sum().item())
+                total_loss += float(loss.item())
+
+        train_acc = total_correct / total_count if total_count > 0 else 0.0
+        train_loss = total_loss / max(1, len(loader))
+
+        val_acc, val_f1, _ = eval_model(
+            model=model,
+            x=full_x,
+            edge_index=full_edge_index,
+            y=full_y,
+            mask=full_val_mask,
+        )
+
+        dt = time.time() - t0
+
+        history["epoch"].append(epoch)
+        history["train_loss"].append(train_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+        history["val_f1_macro"].append(val_f1)
+        history["epoch_time_s"].append(dt)
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+        print(
+            f"Epoch {epoch:03d} | "
+            f"loss {train_loss:.4f} | "
+            f"train_acc {train_acc:.3f} | "
+            f"val_acc {val_acc:.3f} | "
+            f"val_f1 {val_f1:.3f} | "
+            f"{dt:.2f}s"
+        )
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    return history
+
+
+def train_one_epoch_rgcn(
+    model,
+    x,
+    edge_index,
+    edge_type,
+    y,
+    train_mask,
+    optimizer,
+):
+    model.train()
+    optimizer.zero_grad()
+
+    out = model(x, edge_index, edge_type)
+    loss = F.cross_entropy(out[train_mask], y[train_mask])
+
+    loss.backward()
+    optimizer.step()
+
+    preds = out.argmax(dim=1)
+    train_acc = (preds[train_mask] == y[train_mask]).float().mean().item()
+
+    return float(loss.item()), float(train_acc)
+
+
+@torch.no_grad()
+def eval_model_rgcn(model, x, edge_index, edge_type, y, mask):
+    model.eval()
+
+    out = model(x, edge_index, edge_type)
+    preds = out.argmax(dim=1)
+
+    acc = (preds[mask] == y[mask]).float().mean().item()
+
+    y_true = y[mask].cpu().numpy()
+    y_pred = preds[mask].cpu().numpy()
+
+    macro_f1 = f1_score(y_true, y_pred, average="macro")
+    per_class_f1 = f1_score(y_true, y_pred, average=None)
+
+    return acc, macro_f1, per_class_f1
+
+
+def run_training_rgcn(
+    model,
+    data,
+    epochs=20,
+    lr=0.01,
+    weight_decay=5e-4,
+):
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    history = {
+        "epoch": [],
+        "train_loss": [],
+        "train_acc": [],
+        "val_acc": [],
+        "val_f1_macro": [],
+        "epoch_time_s": [],
+    }
+
+    best_val_acc = 0.0
+    best_state = None
+
+    for epoch in range(1, epochs + 1):
+        start = time.time()
+
+        train_loss, train_acc = train_one_epoch_rgcn(
+            model=model,
+            x=data.x,
+            edge_index=data.edge_index,
+            edge_type=data.edge_type,
+            y=data.y,
+            train_mask=data.train_mask,
+            optimizer=optimizer,
+        )
+
+        val_acc, val_macro_f1, _ = eval_model_rgcn(
+            model=model,
+            x=data.x,
+            edge_index=data.edge_index,
+            edge_type=data.edge_type,
+            y=data.y,
+            mask=data.val_mask,
+        )
+
+        epoch_time = time.time() - start
+
+        history["epoch"].append(epoch)
+        history["train_loss"].append(train_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+        history["val_f1_macro"].append(val_macro_f1)
+        history["epoch_time_s"].append(epoch_time)
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+        print(
+            f"Epoch {epoch:03d} | "
+            f"loss {train_loss:.4f} | "
+            f"train_acc {train_acc:.3f} | "
+            f"val_acc {val_acc:.3f} | "
+            f"val_f1 {val_macro_f1:.3f} | "
+            f"{epoch_time:.2f}s"
+        )
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    return history
+
+
+@torch.no_grad()
+def measure_inference_time_rgcn(
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    edge_index: torch.Tensor,
+    edge_type: torch.Tensor,
+    repeats: int = 1,
+) -> float:
+    model.eval()
+
+    start = time.time()
+    for _ in range(repeats):
+        _ = model(x, edge_index, edge_type)
+    end = time.time()
+
+    return float((end - start) / repeats)
+
+
 def run_training_dispatch(
     model_name: str,
     model: torch.nn.Module,
@@ -334,6 +575,25 @@ def run_training_dispatch(
             weight_decay=weight_decay,
             batch_size=batch_size,
             device=device,
+        )
+
+    elif model_name == "clustergcn":
+        return train_clustergcn(
+            model=model,
+            data=data,
+            epochs=epochs,
+            lr=lr,
+            weight_decay=weight_decay,
+            device=device,
+        )
+
+    elif model_name == "rgcn":
+        return run_training_rgcn(
+            model=model,
+            data=data,
+            epochs=epochs,
+            lr=lr,
+            weight_decay=weight_decay,
         )
 
     else:

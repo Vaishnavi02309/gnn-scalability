@@ -1,5 +1,7 @@
 from src.models.graphsage import GraphSAGE
 from src.models.graphsaint import GraphSAINTNet
+from src.models.clustergcn import ClusterGCNNet
+from src.models.rgcn import RGCNNet
 
 def build_model(
     model_name: str,
@@ -44,10 +46,24 @@ def build_model(
         )
 
     elif model_name == "clustergcn":
-        raise NotImplementedError("Cluster-GCN not added yet")
+        return ClusterGCNNet(
+            in_dim=in_dim,
+            hidden_dim=hidden_dim,
+            out_dim=out_dim,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
 
     elif model_name == "rgcn":
-        raise NotImplementedError("R-GCN not added yet")
+        return RGCNNet(
+            in_dim=in_dim,
+            hidden_dim=hidden_dim,
+            out_dim=out_dim,
+            num_relations=kwargs["num_relations"],
+            num_layers=num_layers,
+            dropout=dropout,
+            num_bases=kwargs.get("num_bases", None),
+        )
 
     else:
         raise ValueError(f"Unknown model_name: {model_name}")

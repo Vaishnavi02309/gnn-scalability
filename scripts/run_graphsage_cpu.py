@@ -1,5 +1,6 @@
 import sys
 import os
+import platform
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -27,6 +28,29 @@ for frac in GRAPH_FRACTIONS:
         hidden_dim=64,
         lr=0.01,
         batch_size=4000,
+        device="cpu",
+        save_dir="results",
+    )
+for frac in GRAPH_FRACTIONS:
+    if platform.system() != 'Windows':
+        run_node_exp(
+            model_name="clustergcn",
+            graph_fraction=frac,
+            epochs=5,
+            hidden_dim=64,
+            lr=0.01,
+            device="cpu",
+            save_dir="results",
+        )
+    else:
+        print("Skipping ClusterGCN on Windows due to METIS not being supported.")
+for frac in GRAPH_FRACTIONS:
+    run_node_exp(
+        model_name="rgcn",
+        graph_fraction=frac,
+        epochs=10,
+        hidden_dim=64,
+        lr=0.01,
         device="cpu",
         save_dir="results",
     )
