@@ -6,7 +6,13 @@ from typing import Dict, Tuple
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import classification_report, f1_score
-from torch_geometric.loader import GraphSAINTRandomWalkSampler
+
+_GRAPHSAINT_IMPORT_ERROR = None
+try:
+    from torch_geometric.loader import GraphSAINTRandomWalkSampler
+except ImportError as e:
+    GraphSAINTRandomWalkSampler = None  # type: ignore
+    _GRAPHSAINT_IMPORT_ERROR = e
 from torch_geometric.loader import ClusterData, ClusterLoader
 
 
@@ -198,15 +204,27 @@ def train_graphsaint(
     """
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    loader = GraphSAINTRandomWalkSampler(
-        data=data.cpu(),
-        batch_size=batch_size,
-        walk_length=walk_length,
-        num_steps=num_steps,
-        sample_coverage=sample_coverage,
-        shuffle=True,
-        num_workers=0,
-    )
+    if GraphSAINTRandomWalkSampler is None:
+        raise RuntimeError(
+            "GraphSAINT training requires the optional PyG dependency 'torch-sparse'. "
+            "Install it before running graphsaint experiments, e.g. `pip install torch-sparse`."
+        ) from _GRAPHSAINT_IMPORT_ERROR
+
+    try:
+        loader = GraphSAINTRandomWalkSampler(
+            data=data.cpu(),
+            batch_size=batch_size,
+            walk_length=walk_length,
+            num_steps=num_steps,
+            sample_coverage=sample_coverage,
+            shuffle=True,
+            num_workers=0,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "GraphSAINT training requires the optional PyG dependency 'torch-sparse'. "
+            "Install it before running graphsaint experiments, e.g. `pip install torch-sparse`."
+        ) from exc
 
     history = {
         "epoch": [],

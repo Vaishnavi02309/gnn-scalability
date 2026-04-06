@@ -7,8 +7,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.experiments.run_node_exp import run_node_exp
 
 
-#GRAPH_FRACTIONS = [0.25, 0.50, 0.75, 1.00]
-GRAPH_FRACTIONS = [0.25]
+GRAPH_FRACTIONS = [0.25, 0.50, 0.75, 1.00]
+#GRAPH_FRACTIONS = [0.25]
 
 for frac in GRAPH_FRACTIONS:
     run_node_exp(
